@@ -1,0 +1,1308 @@
+---
+title: "AMS"
+author: "Elia Zanini, Marco Catoia, Alberto Polato"
+date: "2026-02-23"
+output: html_document
+---
+
+EXPLORATORY DATA ANALYSIS 
+CHECKING VARIABLES IN THE DATASET, CHECKING AND DELETING NULL VALUES, CORRELATION ANALYSIS, ADDING NEW VARIABLES, ECC
+
+```{r}
+
+# Load libraries
+library(tidyverse)
+library(psych)
+library(naniar)
+library(car)
+# Load dataset
+df <- read.csv("diabetes.csv")
+
+# Dimensioni
+dim(df)
+
+# Struttura
+str(df)
+
+# Nomi variabili
+colnames(df)
+```
+creating diabetes variables and checking its proportion
+```{r}
+# Create binary diabetes variable
+df <- df %>%
+  mutate(diabetes = ifelse(glyhb > 7, 1, 0))
+
+# Check prevalence
+table(df$diabetes)
+prop.table(table(df$diabetes))
+```
+
+missing values analysis
+```{r}
+# Count missing per variable
+missing_summary <- sapply(df, function(x) sum(is.na(x)))
+missing_percent <- sapply(df, function(x) mean(is.na(x)) * 100)
+
+missing_table <- data.frame(
+  Variable = names(missing_summary),
+  Missing_Count = missing_summary,
+  Missing_Percent = round(missing_percent, 2)
+)
+
+missing_table
+```
+
+deleting rows with a lot of null values (bp.2s and bp.2d) and all the rows with many null values
+```{r}
+df <- df %>%
+  select(-bp.2s, -bp.2d)
+
+df <- df[complete.cases(df), ]
+
+```
+
+renaming bp.1s and bp.1d and a clearer way
+```{r}
+df <- df %>%
+  rename(
+    systolic_bp = bp.1s,
+    diastolic_bp = bp.1d
+  )
+```
+
+
+```{r}
+df
+```
+
+identifying numerical variables
+```{r}
+numeric_vars <- df %>%
+  select(where(is.numeric)) %>%
+  select(-id)  # Remove ID if numeric
+
+# Descriptive statistics
+describe(numeric_vars)
+```
+
+frequency of categorical variables
+```{r}
+# Gender
+table(df$gender)
+prop.table(table(df$gender))
+
+# Location
+table(df$location)
+prop.table(table(df$location))
+
+# Frame
+table(df$frame)
+prop.table(table(df$frame))
+
+```
+listing numerical variables
+```{r}
+library(dplyr)
+
+numeric_df <- df %>%
+  select(where(is.numeric)) %>%
+  select(-id)   # togliamo identificatore
+
+colnames(numeric_df)
+```
+
+computing correlation between numerical variables
+```{r}
+library(corrplot)
+
+cor_matrix_spearman <- cor(numeric_df,
+                           use = "pairwise.complete.obs",
+                           method = "spearman")
+
+round(cor_matrix_spearman, 2)
+
+
+```
+plotting the result
+```{r}
+library(corrplot)
+corrplot(cor_matrix_spearman,
+         method = "color",
+         type = "upper",
+         tl.cex = 0.7)
+```
+
+
+encoding categorical variables as factors to ensure regressions work properly
+```{r}
+# Convertire le variabili categoriche in fattori
+df$location <- as.factor(df$location)
+df$gender <- as.factor(df$gender)
+df$frame <- as.factor(df$frame)
+
+# Convertire la risposta in fattore
+df$diabetes <- as.factor(df$diabetes)
+str(df)
+```
+
+
+Trying to see the result of a first very simple logistic regression on the whole dataset: 
+Logistic regression on all the variables before any transformation (no hypertension, BMI or WHR)
+```{r}
+mod <- glm(diabetes ~ chol + stab.glu + hdl + ratio + 
+                       location + age + gender + height + weight + 
+                       frame + systolic_bp + diastolic_bp + waist + hip + 
+                       time.ppn,
+           data = df,
+           family = binomial)
+
+# Riassunto del modello
+summary(mod)
+vif(mod)
+```
+
+
+Creating new variables BMI in kg/m^2 and WHR (wais hip ratio)
+```{r}
+df$BMI <- df$weight / (df$height^2) * 703
+df$WHR <- df$waist / df$hip
+
+df <- df %>%
+  select(-weight, -height, -waist, -hip)
+```
+
+Creating variable hypertension (when systolic_bp >= 140 or diastolic_bp >= 90)
+```{r}
+df <- df %>%
+  mutate(
+    hypertension = ifelse(systolic_bp >= 140 | diastolic_bp >= 90, 1, 0)
+  )
+df$hypertension <- as.factor(df$hypertension)
+str(df)
+```
+
+Trying a new simple logistic regression with the new variables WHR, BMI and hypertension
+```{r}
+mod2 <- glm(diabetes ~ chol + stab.glu + hdl +
+                       location + age + gender + BMI + 
+                       frame + WHR + hypertension + 
+                       time.ppn,
+           data = df,
+           family = binomial)
+
+#Riassunto del modello
+summary(mod2)
+vif(mod2)
+```
+
+
+Distribution of variables colored by diagnosis
+```{r}
+library(GGally)
+
+numeric_df <- df[, sapply(df, is.numeric)]
+numeric_df$id <- NULL
+
+# assicuriamoci che diabetes sia presente per colorare
+numeric_df$diabetes <- df$diabetes
+
+# colonne da plottare (escludiamo diabetes e hypertension)
+num_cols <- setdiff(names(numeric_df), c("diabetes", "hypertension"))
+
+# funzione per correlazione Spearman overall
+upper_cor <- function(data, mapping, ...) {
+  x <- GGally::eval_data_col(data, mapping$x)
+  y <- GGally::eval_data_col(data, mapping$y)
+  r <- suppressWarnings(cor(x, y, use = "complete.obs", method = "spearman"))
+  ggally_text(
+    label = sprintf("%.2f", r),
+    mapping = aes(),
+    ...
+  ) +
+    theme_void()
+}
+
+suppressWarnings(
+  ggpairs(
+    numeric_df,
+    columns = which(names(numeric_df) %in% num_cols),
+    aes(color = factor(diabetes), alpha = 0.5),
+    upper = list(continuous = upper_cor),
+    progress = FALSE
+  )
+)
+
+```
+Bivariate distribution of variables to check the presence of subgroups or clusters
+```{r}
+pairs(df)
+```
+
+
+MCD for robust estimates and outliers detection (without time_ppn because it was giving computational errors)
+```{r}
+# selezione variabili continue fisiologiche
+library(naniar)
+library(MASS)
+library(boot)
+library(car)         # VIF
+library(robustbase)  # robust regression
+library(mclust)      # model-based clustering
+library(broom)
+library(sandwich)
+library(lmtest)
+
+library(robustbase)
+
+cont_vars <- numeric_df[, c("BMI", "WHR", "stab.glu", "chol", "hdl",
+                    "systolic_bp", "diastolic_bp",
+                    "age")]
+
+fit_MCD <- covMcd(x = cont_vars, alpha = 0.75)
+fit_MCD
+
+
+plot(fit_MCD, classic = TRUE)
+```
+tolerance elipsoide in 3d
+```{r}
+scatter3d(
+  x = cont_vars$BMI,
+  y = cont_vars$stab.glu,
+  z = cont_vars$age,
+  ellipsoid = TRUE
+)
+```
+
+
+plot with threshold line
+```{r}
+md_rob <- sqrt(fit_MCD$mah)
+
+plot(md_rob)
+abline(h = sqrt(qchisq(0.975, df = ncol(cont_vars))), col = "red", lwd = 2)
+
+```
+theoretical threshold for identifying outliers
+```{r}
+p <- ncol(cont_vars)
+cutoff <- sqrt(qchisq(0.975, df = p))  # soglia distanza robusta
+cutoff
+```
+actual number of outliers and indices
+```{r}
+outliers <- md_rob > cutoff
+table(outliers)
+which(outliers)
+```
+
+plot with colored outliers 
+```{r}
+plot(md_rob)
+abline(h = sqrt(qchisq(0.975, df = ncol(cont_vars))), col = "red", lwd = 2)
+points(which(outliers), md_rob[outliers], col = "red", pch = 19)
+```
+
+
+removal of outliers and creating a new dataframe
+```{r}
+df_clean <- df[!outliers, ]
+dim(df)        # dimensione originale
+dim(df_clean)  # dimensione pulita
+```
+logistic regression on the clean dataset on all the variables after the transformations (BMI WHR hypertension)
+```{r}
+complete_logit_clean <- glm(diabetes ~ BMI + WHR + stab.glu + chol + hdl +
+                     location + frame + age + ratio + hypertension + time.ppn,
+                   data = df_clean,
+                   family = binomial)
+summary(complete_logit_clean)
+library(car) 
+vif(complete_logit_clean) 
+```
+
+
+
+
+logistic on the clean dataset (with transformed variables but without the categoricals frame location gender, and without ratio) 
+```{r}
+logit_clean <- glm(diabetes ~ BMI + WHR + stab.glu + chol + hdl +
+                     hypertension + age + time.ppn,
+                   data = df_clean,
+                   family = binomial)
+summary(logit_clean)
+library(car) 
+vif(logit_clean)  #metodo per verificare collinearità
+```
+robust logistic regression on the non-cleaned dataset on the already transformed variables (so BMI, WHR, hypertension)
+```{r}
+robust_logit_complete <- glmrob(diabetes ~ chol + stab.glu + hdl + ratio + 
+                       location + age + gender + BMI + 
+                       frame + WHR + hypertension + 
+                       time.ppn,
+                       data = df,
+                       family = binomial)
+
+summary(robust_logit_complete)
+vif(robust_logit_complete)
+```
+
+
+
+
+robust logistic regression on the non-cleaned dataset (with transformed variables but without the categoricals frame location gender, and without ratio)
+```{r}
+library(robustbase)
+
+robust_logit <- glmrob(diabetes ~ BMI + WHR + stab.glu + chol + hdl +
+                         hypertension + age + time.ppn,
+                       data = df,
+                       family = binomial)
+
+summary(robust_logit)
+library(car) 
+vif(robust_logit)  #metodo per verificare collinearità
+
+```
+Verifichiamo con plot e influence measures per i primi due modelli calcolati sul dataset completo se ci sono outliers o osservazioni particolarmente influenti che potrebbero peggiorare i nostri primi due modelli
+
+Plot e influence measures primo modello (mod)
+```{r}
+plot(mod)
+influence.measures(mod)
+
+```
+
+Plot e influence measures secondo modello (mod2)
+```{r}
+plot(mod2)
+influence.measures(mod2)
+```
+
+Ora lo calcoliamo sul miglior modello sul dataset pulito per vedere se qualcosa è cambiato
+```{r}
+plot(logit_clean)
+influence.measures(logit_clean)
+```
+
+
+
+
+
+
+Robust logistic regression with the most informative variables
+```{r}
+library(robustbase)
+robust_logit2 <- glmrob(
+  diabetes ~ BMI + stab.glu + hypertension + chol,
+  data = df,
+  family = binomial
+)
+summary(robust_logit2)
+```
+reimporting data and restructuring them as before
+```{r}
+  data_raw <- read.csv("diabetes.csv")
+  data_raw$BMI <- data_raw$weight / (data_raw$height^2) * 703
+  data_raw$WHR <- data_raw$waist / data_raw$hip
+  data_raw$log_glyhb <- log(data_raw$glyhb)
+  data_raw$bp.2s <- NULL
+  data_raw$bp.2d <- NULL
+  names(data_raw)[names(data_raw) == "bp.1s"] <- "systolic_bp"
+  names(data_raw)[names(data_raw) == "bp.1d"] <- "diastolic_bp"
+  data_raw$hypertension <- ifelse(data_raw$systolic_bp >= 140 | data_raw$diastolic_bp >= 90, 1, 0)
+  data_raw <- na.omit(data_raw)
+data_raw
+```
+
+Non-robust linear regression on all variables in the dataset (variables obtained from transformations are not included) on dataset with outliers
+```{r}
+lm1 <- lm(glyhb ~ chol + stab.glu + hdl + ratio + 
+                       location + age + gender + height + weight + 
+                       frame + systolic_bp + diastolic_bp + waist + hip + 
+                       time.ppn,
+                       data = data_raw)
+summary(lm1)
+```
+non-robust linear regression (with hypertension, BMI, WHR) on dataset with outliers
+```{r}
+lm2 <- lm(glyhb ~ chol + stab.glu + hdl + ratio + 
+                       location + age + gender + BMI + 
+                       frame + WHR + hypertension + 
+                       time.ppn,
+                  data = data_raw)
+
+summary(lm2)
+```
+
+
+Non-robust linear regression without categoricals and ratio on dataset with outliers
+```{r}
+lm3 <- lm(glyhb ~ BMI + WHR + stab.glu + hypertension +
+               chol + hdl + age + time.ppn,
+               data = data_raw)
+
+summary(lm3)
+```
+outliers removal
+```{r}
+data_raw_clean <- data_raw[!outliers, ]
+nrow(data_raw)
+nrow(data_raw_clean)
+```
+
+
+Non-robust linear regression with all post-transformation vars on outlier-free dataset
+```{r}
+lm4 <- lm(glyhb ~ chol + stab.glu + hdl + ratio + 
+                       location + age + gender + BMI + 
+                       frame + WHR + hypertension + 
+                       time.ppn,
+               data = data_raw_clean)
+
+summary(lm4)
+```
+
+
+Non-robust linear regression without categoricals and ratio on outlier-free dataset
+```{r}
+lm5 <- lm(glyhb ~ BMI + WHR + stab.glu + chol + hdl +
+                  hypertension + age + time.ppn,
+               data = data_raw_clean)
+
+summary(lm5)
+```
+
+
+Robust linear regression on glyhb with all post-transformation variables
+```{r}
+library(MASS)
+  model_rlm <- rlm(glyhb ~ chol + stab.glu + hdl + ratio + 
+                       location + age + gender + BMI + 
+                       frame + WHR + hypertension + 
+                       time.ppn,
+     data = data_raw)
+  summary(model_rlm)
+```
+robust linear regression on glyhb without categoricals and ratio
+```{r}
+model_rlm2 <- rlm(glyhb ~ BMI + WHR + stab.glu + chol + hdl +
+                  hypertension + age + time.ppn,
+     data = data_raw)
+  summary(model_rlm2)
+```
+
+
+DIAGNOSTICA MODELLI LOGISTICI E LINEARI E VALUTAZIONE PERFORMANCE
+
+Influential Points, Cook's Distance and leverages for complete logit clean vs logit clean
+Non robust models
+```{r}
+# Logistica pulita completa
+infl_complete <- influence.measures(complete_logit_clean)
+
+# Cook's distance
+cook_complete <- cooks.distance(complete_logit_clean)
+plot(cook_complete, type = "h",
+     main = "Cook's Distance - complete logit clean",
+     ylab = "Cook's D", xlab = "Osservazione")
+abline(h = 4 / nrow(df_clean), col = "red", lty = 2)
+text(which(cook_complete > 4 / nrow(df_clean)),
+     cook_complete[cook_complete > 4 / nrow(df_clean)],
+     labels = which(cook_complete > 4 / nrow(df_clean)),
+     cex = 0.7, pos = 3)
+
+# Leverage (hat values)
+hat_complete <- hatvalues(complete_logit_clean)
+p_complete   <- length(coef(complete_logit_clean))
+n_complete   <- nrow(df_clean)
+plot(hat_complete, type = "h",
+     main = "Leverage – complete logit clean",
+     ylab = "Hat values", xlab = "Osservazione")
+abline(h = 2 * p_complete / n_complete, col = "red", lty = 2)
+
+cat("Osservazioni con Cook's D elevato (complete logit clean):")
+print(which(cook_complete > 4 / n_complete))
+
+# Logistica pulita
+cook_logit <- cooks.distance(logit_clean)
+plot(cook_logit, type = "h",
+     main = "Cook's Distance – logit clean",
+     ylab = "Cook's D", xlab = "Osservazione")
+abline(h = 4 / nrow(df_clean), col = "red", lty = 2)
+text(which(cook_logit > 4 / nrow(df_clean)),
+     cook_logit[cook_logit > 4 / nrow(df_clean)],
+     labels = which(cook_logit > 4 / nrow(df_clean)),
+     cex = 0.7, pos = 3)
+
+cat("Osservazioni con Cook's D elevato (logit clean):")
+print(which(cook_logit > 4 / nrow(df_clean)))
+# Leverage (hat values) per logit_clean
+hat_logit <- hatvalues(logit_clean)
+p_logit   <- length(coef(logit_clean))
+n_logit   <- nrow(df_clean)
+
+plot(hat_logit, type = "h",
+     main = "Leverage – logit clean",
+     ylab = "Hat values", xlab = "Osservazione")
+
+abline(h = 2 * p_logit / n_logit, col = "red", lty = 2)
+
+cat("Osservazioni con leverage elevato (logit clean):")
+print(which(hat_logit > 2 * p_logit / n_logit))
+```
+
+
+Pearson e devianza residua per la logistica
+
+```{r}
+# Residui di Pearson e di devianza per logit_clean
+res_pearson  <- residuals(logit_clean, type = "pearson")
+res_deviance <- residuals(logit_clean, type = "deviance")
+
+par(mfrow = c(1, 2))
+plot(fitted(logit_clean), res_pearson,
+     main = "Residui di Pearson vs Fitted",
+     xlab = "Valori adattati (prob)", ylab = "Residui Pearson")
+abline(h = 0, col = "red")
+
+plot(fitted(logit_clean), res_deviance,
+     main = "Residui di Devianza vs Fitted",
+     xlab = "Valori adattati (prob)", ylab = "Residui Devianza")
+abline(h = 0, col = "red")
+par(mfrow = c(1, 1))
+
+#complete logit clean
+#Residui di Pearson e di Devianza per complete_logit_clean
+res_pearson_complete  <- residuals(complete_logit_clean, type = "pearson")
+res_deviance_complete <- residuals(complete_logit_clean, type = "deviance")
+
+par(mfrow = c(1, 2))
+
+# Residui di Pearson vs valori adattati
+plot(fitted(complete_logit_clean), res_pearson_complete,
+     main = "Residui di Pearson vs Fitted (complete logit)",
+     xlab = "Valori adattati (prob)", ylab = "Residui Pearson")
+abline(h = 0, col = "red", lty = 2)
+
+# Residui di Devianza vs valori adattati
+plot(fitted(complete_logit_clean), res_deviance_complete,
+     main = "Residui di Devianza vs Fitted (complete logit)",
+     xlab = "Valori adattati (prob)", ylab = "Residui Devianza")
+abline(h = 0, col = "red", lty = 2)
+
+par(mfrow = c(1, 1))
+```
+
+Goodness of fit – Test di Hosmer-Lemeshow
+
+```{r}
+library(ResourceSelection)
+
+# Hosmer-Lemeshow per i modelli logistici principali
+hl_complete <- hoslem.test(
+  as.numeric(as.character(df_clean$diabetes)),
+  fitted(complete_logit_clean), g = 10)
+cat("Hosmer-Lemeshow: complete_logit_clean")
+print(hl_complete)
+
+hl_logit <- hoslem.test(
+  as.numeric(as.character(df_clean$diabetes)),
+  fitted(logit_clean), g = 10)
+cat("\n=== Hosmer-Lemeshow: logit_clean ===\n")
+print(hl_logit)
+```
+
+Curva ROC e AUC non robust logit
+
+```{r}
+library(pROC)
+
+# Probabilità predette
+pred_complete <- predict(complete_logit_clean, type = "response")
+pred_logit    <- predict(logit_clean, type = "response")
+true_y        <- as.numeric(as.character(df_clean$diabetes))
+
+roc_complete <- roc(true_y, pred_complete, quiet = TRUE)
+roc_logit    <- roc(true_y, pred_logit,    quiet = TRUE)
+
+# Plot curva ROC
+plot(roc_complete, col = "steelblue", lwd = 2,
+     main = "ROC curves - non-robust models")
+lines(roc_logit, col = "darkorange", lwd = 2)
+legend("bottomright",
+       legend = c(paste0("complete_logit_clean (AUC=", round(auc(roc_complete), 3), ")"),
+                  paste0("logit_clean (AUC=",          round(auc(roc_logit),    3), ")")),
+       col = c("steelblue", "darkorange"), lwd = 2)
+
+cat("AUC complete_logit_clean:", round(auc(roc_complete), 4), "\n")
+cat("AUC logit_clean:         ", round(auc(roc_logit),    4), "\n")
+```
+robust logit
+```{r}
+library(pROC)
+
+# Probabilità predette
+pred_robust_complete <- predict(robust_logit_complete, type = "response")
+pred_robust_logit    <- predict(robust_logit, type = "response")
+
+# Variabili risposta (devono venire dai dataset usati nei modelli)
+true_complete <- as.numeric(as.character(df$diabetes))
+true_clean    <- as.numeric(as.character(df$diabetes))
+
+# ROC
+roc_robust_complete <- roc(true_complete, pred_robust_complete, quiet = TRUE)
+roc_robust_logit    <- roc(true_clean, pred_robust_logit, quiet = TRUE)
+
+# Plot
+plot(roc_robust_complete, col = "darkgreen", lwd = 2,
+     main = "ROC curves - Robust Models")
+
+lines(roc_robust_logit, col = "purple", lwd = 2)
+
+legend("bottomright",
+       legend = c(
+         paste0("robust_logit_complete (AUC=", round(auc(roc_robust_complete), 3), ")"),
+         paste0("robust_logit (AUC=", round(auc(roc_robust_logit), 3), ")")
+       ),
+       col = c("darkgreen", "purple"),
+       lwd = 2)
+
+# AUC
+cat("AUC robust_complete:", round(auc(roc_robust_complete), 4), "\n")
+cat("AUC robust_logit:   ", round(auc(roc_robust_logit), 4), "\n")
+```
+Confusion matrices
+```{r}
+# funzione per creare confusion matrix
+get_cm <- function(pred_prob, true_y, threshold = 0.5) {
+  pred_class <- ifelse(pred_prob >= threshold, 1, 0)
+  table(Predicted = pred_class, Actual = true_y)
+}
+
+# variabili risposta
+true_clean <- as.numeric(as.character(df_clean$diabetes))
+true_df    <- as.numeric(as.character(df$diabetes))
+
+# confusion matrices
+cm_complete <- get_cm(pred_complete, true_clean)
+cm_logit    <- get_cm(pred_logit, true_clean)
+cm_rcomplete <- get_cm(pred_robust_complete, true_df)
+cm_rlogit    <- get_cm(pred_robust_logit, true_df)
+
+# stampa con nomi dei modelli
+cat("\nConfusion Matrix – complete_logit_clean\n")
+print(cm_complete)
+
+cat("\nConfusion Matrix – logit_clean\n")
+print(cm_logit)
+
+cat("\nConfusion Matrix – robust_logit_complete\n")
+print(cm_rcomplete)
+
+cat("\nConfusion Matrix – robust_logit\n")
+print(cm_rlogit)
+```
+
+```{r}
+# funzione per confusion matrix
+get_cm <- function(pred_prob, true_y, threshold = 0.5) {
+  pred_class <- ifelse(pred_prob >= threshold, 1, 0)
+  table(Predicted = pred_class, Actual = true_y)
+}
+
+# funzione per metriche
+metrics_from_cm <- function(cm, model_name){
+  
+  TP <- cm["1","1"]
+  TN <- cm["0","0"]
+  FP <- cm["1","0"]
+  FN <- cm["0","1"]
+  
+  accuracy  <- (TP + TN) / (TP + TN + FP + FN)
+  precision <- TP / (TP + FP)
+  recall    <- TP / (TP + FN)
+  specificity <- TN / (TN + FP)
+  f1 <- 2 * (precision * recall) / (precision + recall)
+  
+  data.frame(
+    Model = model_name,
+    Accuracy = accuracy,
+    Precision = precision,
+    Recall = recall,
+    Specificity = specificity,
+    F1_score = f1
+  )
+}
+
+# variabili risposta
+true_clean <- as.numeric(as.character(df_clean$diabetes))
+true_df    <- as.numeric(as.character(df$diabetes))
+
+# confusion matrices
+cm_complete <- get_cm(pred_complete, true_clean)
+cm_logit    <- get_cm(pred_logit, true_clean)
+cm_rcomplete <- get_cm(pred_robust_complete, true_df)
+cm_rlogit    <- get_cm(pred_robust_logit, true_df)
+
+# metriche
+m1 <- metrics_from_cm(cm_complete, "complete_logit_clean")
+m2 <- metrics_from_cm(cm_logit, "logit_clean")
+m3 <- metrics_from_cm(cm_rcomplete, "robust_logit_complete")
+m4 <- metrics_from_cm(cm_rlogit, "robust_logit")
+
+# tabella finale
+results <- rbind(m1, m2, m3, m4)
+
+print(results)
+```
+
+
+
+Brier Score
+Modelli non robusti
+```{r}
+brier <- function(pred_prob, true_y, model_name) {
+  bs <- mean((pred_prob - true_y)^2)
+  cat(sprintf("Brier Score (%s): %.4f\n", model_name, bs))
+  # 0 = perfetto, 0.25 = modello nullo (baseline 50/50)
+}
+
+brier(pred_complete, true_y, "complete_logit_clean")
+brier(pred_logit,    true_y, "logit_clean")
+```
+Modelli robusti
+```{r}
+# Probabilità predette dai modelli robusti
+pred_robust_complete <- predict(robust_logit_complete, type = "response")
+pred_robust_logit    <- predict(robust_logit, type = "response")
+
+# Variabile risposta dai rispettivi dataset
+true_y_complete <- as.numeric(as.character(df_clean$diabetes))  # usa il dataset corretto del modello
+true_y_logit    <- as.numeric(as.character(df_clean$diabetes))
+
+# Calcolo Brier score
+brier(pred_robust_complete, true_y_complete, "robust_logit_complete")
+brier(pred_robust_logit,    true_y_logit,    "robust_logit")
+```
+
+
+
+
+cross entropy
+Non robust models
+```{r}
+log_loss <- function(pred_prob, true_y, model_name) {
+  eps <- 1e-15
+  pred_prob <- pmax(pmin(pred_prob, 1 - eps), eps)
+  ll <- -mean(true_y * log(pred_prob) + (1 - true_y) * log(1 - pred_prob))
+  cat(sprintf("Log-Loss (%s): %.4f\n", model_name, ll))
+}
+
+log_loss(pred_complete, true_y, "complete_logit_clean")
+log_loss(pred_logit,    true_y, "logit_clean")
+```
+Robust models
+```{r}
+log_loss(pred_robust_complete, true_y, "robust_logit_complete")
+log_loss(pred_robust_logit,    true_y, "robust_logit")
+```
+
+
+
+
+Omoschedasticità, test di Breusch-pagan
+
+```{r}
+library(lmtest)
+library(sandwich)
+
+for (mod_name in c("lm1", "lm2", "lm3", "lm4", "lm5", "model_rlm", "model_rlm2")) {
+  mod_obj <- get(mod_name)
+  bp <- bptest(mod_obj)
+  cat(sprintf("\n=== Breusch-Pagan test: %s ===\n", mod_name))
+  print(bp)
+}
+
+# Grafico scale location
+par(mfrow = c(1, 2))
+
+plot(lm1, which = 3, main = "lm1")
+plot(lm2, which = 3, main = "lm2")
+plot(lm3, which = 3, main = "lm3")
+plot(lm4, which = 3, main = "lm4")
+plot(lm5, which = 3, main = "lm5")
+plot(model_rlm, which = 3, main = "rlm1")
+plot(model_rlm2, which = 3, main = "rlm2")
+
+par(mfrow = c(1, 1))
+```
+
+
+Influential Points per linear mdoels non robusti
+
+```{r}
+diagnose_lm <- function(model, model_name) {
+  n <- nrow(model$model)
+  p <- length(coef(model))
+
+  cook  <- cooks.distance(model)
+  hat   <- hatvalues(model)
+  dffit <- dffits(model)
+
+  cat(sprintf("\n=== Influential Points: %s ===\n", model_name))
+  cat("Soglia Cook's D   : 4/n =", round(4 / n, 4), "\n")
+  cat("Soglia Leverage   : 2p/n =", round(2 * p / n, 4), "\n")
+  cat("Soglia DFFITS     : 2*sqrt(p/n) =", round(2 * sqrt(p / n), 4), "\n")
+  cat("Obs. con Cook > soglia:", sum(cook > 4 / n), "\n")
+  cat("Obs. con hat > soglia :", sum(hat  > 2 * p / n), "\n")
+  cat("Obs. con |DFFITS| > soglia:", sum(abs(dffit) > 2 * sqrt(p / n)), "\n")
+
+  # Plot Cook
+  plot(cook, type = "h",
+       main = paste("Cook's Distance:", model_name),
+       ylab = "Cook's D", xlab = "Osservazione")
+  abline(h = 4 / n, col = "red", lty = 2)
+}
+
+diagnose_lm(lm1, "lm1")
+diagnose_lm(lm2, "lm2")
+diagnose_lm(lm3, "lm3")
+diagnose_lm(lm4, "lm4")
+diagnose_lm(lm5, "lm5")
+
+```
+
+Residuals vs Fitted, qq, scale location, leverage)
+
+```{r}
+par(mfrow = c(2, 2))
+plot(lm1, main = "lm1")
+par(mfrow = c(1, 1))
+
+par(mfrow = c(2, 2))
+plot(lm2, main = "lm2")
+par(mfrow = c(1, 1))
+
+par(mfrow = c(2, 2))
+plot(lm3, main = "lm3")
+par(mfrow = c(1, 1))
+
+par(mfrow = c(2, 2))
+plot(lm4, main = "lm4")
+par(mfrow = c(1, 1))
+
+par(mfrow = c(2, 2))
+plot(lm5, main = "lm5")
+par(mfrow = c(1, 1))
+
+par(mfrow = c(2, 2))
+plot(model_rlm, main = "model_rlm")
+par(mfrow = c(1, 1))
+
+par(mfrow = c(2, 2))
+plot(model_rlm2, main = "model_rlm2")
+par(mfrow = c(1, 1))
+```
+
+VIF per modelli lineari
+
+```{r}
+library(car)
+
+for (mod_name in c("lm1", "lm2", "lm3", "lm4", "lm5", "model_rlm", "model_rlm2")) {
+  cat(sprintf("\n=== VIF: %s ===\n", mod_name))
+  print(vif(get(mod_name)))
+}
+```
+
+AIC, BIC e R² a confronto tra modelli lineari
+
+```{r aic-bic-linear}
+model_comparison_lm <- data.frame(
+  Model     = c("lm1", "lm2", "lm3", "lm4", "lm5",
+                  "model_rlm", "model_rlm2"),
+  AIC         = c(AIC(lm1), AIC(lm2), AIC(lm3), AIC(lm4), AIC(lm5),
+                  AIC(model_rlm), AIC(model_rlm2)),
+  BIC         = c(BIC(lm1), BIC(lm2), BIC(lm3), BIC(lm4), BIC(lm5),
+                  BIC(model_rlm), BIC(model_rlm2)),
+  Adj_R2      = c(summary(lm1)$adj.r.squared,
+                  summary(lm2)$adj.r.squared,
+                  summary(lm3)$adj.r.squared,
+                  summary(lm4)$adj.r.squared,
+                  summary(lm5)$adj.r.squared,
+                  NA, NA)  # rlm non ha R² standard
+)
+model_comparison_lm <- model_comparison_lm[order(model_comparison_lm$AIC), ]
+print(model_comparison_lm)
+```
+
+
+
+
+
+RANDOM FOREST
+```{r}
+library(randomForest)
+library(pROC)
+
+# training sul dataset pulito
+set.seed(42)
+rf_model <- randomForest(
+  diabetes ~ BMI + WHR + stab.glu + chol + hdl + hypertension + age + time.ppn,
+  data       = df,
+  ntree      = 500,
+  mtry       = 3,        # default per classificazione: floor(sqrt(p))
+  importance = TRUE,
+  keep.forest = TRUE
+)
+
+print(rf_model)
+# OOB error rate = stima out-of-bag dell'errore, non serve un test set separato
+# Cerca il mtry ottimale minimizzando OOB error
+set.seed(42)
+tune_rf <- tuneRF(
+  x          = df[, c("BMI", "WHR", "stab.glu", "chol", "hdl", "age", "time.ppn")],
+  y          = df$diabetes,
+  mtryStart  = 2,
+  stepFactor = 1.5,
+  improve    = 0.01,
+  ntreeTry   = 300,
+  trace      = FALSE,
+  plot       = TRUE
+)
+best_mtry <- tune_rf[which.min(tune_rf[, "OOBError"]), "mtry"]
+cat("Miglior mtry:", best_mtry, "\n")
+
+# Riallena con il mtry ottimale
+set.seed(42)
+rf_final <- randomForest(
+  diabetes ~ BMI + WHR + stab.glu + chol + hdl + hypertension + age + time.ppn,
+  data        = df,
+  ntree       = 500,
+  mtry        = best_mtry,
+  importance  = TRUE,
+  keep.forest = TRUE
+)
+print(rf_final)
+# MeanDecreaseAccuracy: quanto peggiora l'OOB accuracy senza quella variabile
+# MeanDecreaseGini: impurità media di Gini (meno interpretabile ma più stabile)
+importance(rf_final)
+varImpPlot(rf_final,
+           main = "Variable Importance – Random Forest",
+           col  = "steelblue", pch = 16)
+# Probabilità predette OOB
+pred_rf_prob <- rf_final$votes[, 2]   # prob. diabetico
+true_y       <- as.numeric(as.character(df$diabetes))
+
+roc_rf <- roc(true_y, pred_rf_prob, quiet = TRUE)
+cat("AUC Random Forest:", round(auc(roc_rf), 4), "\n")
+
+# Probabilità predette modelli robusti
+pred_robust_complete <- predict(robust_logit_complete, type = "response")
+pred_robust_logit    <- predict(robust_logit,          type = "response")
+
+roc_robust_complete <- roc(true_y, pred_robust_complete, quiet = TRUE)
+roc_robust_logit    <- roc(true_y, pred_robust_logit,    quiet = TRUE)
+
+# Confronto curva ROC: RF vs Robusti
+plot(roc_rf,             col = "forestgreen", lwd = 2,
+     main = "Confronto ROC: RF vs Modelli Robusti")
+lines(roc_robust_complete, col = "blue", lwd = 2)
+lines(roc_robust_logit,    col = "purple",    lwd = 2)
+legend("bottomright",
+       legend = c(
+         paste0("Random Forest (AUC=",           round(auc(roc_rf),             3), ")"),
+         paste0("robust_logit_complete (AUC=",   round(auc(roc_robust_complete),3), ")"),
+         paste0("robust_logit (AUC=",            round(auc(roc_robust_logit),   3), ")")
+       ),
+       col = c("forestgreen", "blue", "purple"), lwd = 2)
+
+
+```
+
+
+
+BOOTSTRAP SUI MODELLI CHE HANNO OTTENUTO RISULTATI MIGLIORI
+bootstrap per la stabilità dei coefficienti
+```{r}
+library(boot)
+boot_logit <- function(data, indices) {
+  d <- data[indices, ]
+  fit <- glm(diabetes ~ BMI + stab.glu + hypertension + chol + age,
+             data = d, family = binomial)
+  coef(fit)
+  }
+
+set.seed(42)
+boot_res <- boot(data = df_clean, statistic = boot_logit, R = 1000)
+boot.ci(boot_res, type = "perc", index = 2)  #BMI
+boot.ci(boot_res, type = "perc", index = 3)  #stab.glu
+boot.ci(boot_res, type = "perc", index = 4)  #hyper
+boot.ci(boot_res, type = "perc", index = 5)  #chol
+boot.ci(boot_res, type = "perc", index = 6)  #age
+
+
+par(mfrow = c(2, 3))
+for (i in 2:6) {
+  hist(boot_res$t[, i], breaks = 40, col = "steelblue", border = "white",
+       main = names(coef(glm(diabetes ~ BMI + stab.glu + hypertension + chol + age,
+                              data = df_clean, family = binomial)))[i],
+       xlab = "Valore coefficiente", ylab = "Densità", probability = TRUE)
+  abline(v = boot_res$t0[i], col = "red", lwd = 2, lty = 2)
+  abline(v = 0, col = "gray50", lwd = 1)
+}
+par(mfrow = c(1, 1))
+
+# Tabella riassuntiva: stima, bias, SE bootstrap
+print(boot_res)
+
+```
+
+
+
+
+
+
+Modello bayesiano con assunzioni sul prior dei coefficienti
+bayesian model with hamiltonian monte carlo
+```{r}
+library(brms)
+
+bayes_model <- brm(
+  diabetes ~ BMI + stab.glu + age + (1 | location),
+  data = df_clean, family = bernoulli(),
+  prior = c(prior(normal(0, 2.5), class = "b")),
+  chains = 4, iter = 2000
+)
+plot(bayes_model)
+summary(bayes_model)
+
+```
+
+
+
+
+
+
+UNSUPERVISED LEARNING - MODEL BASED CLUSTERING E K-MEANS
+UNSUPERVISED LEARNING - MODEL BASED CLUSTERING E K-MEANS
+
+```{r}
+library(tclust)
+library(mclust)
+library(cluster)
+
+# Variabili per clustering
+X <- df[, c("BMI", "WHR", "stab.glu", "chol", "hdl", "age")]
+X_scaled <- scale(X)
+
+# true_diabetes su df
+true_diabetes <- as.numeric(as.character(df$diabetes))
+```
+
+mbc con valutazione bic
+```{r}
+# Model Based Clustering
+model <- Mclust(X_scaled, G = 2)
+plot(model, what = "classification")
+plot(model, what = "BIC")
+summary(model)
+
+df$cluster_mclust <- as.factor(model$classification)
+
+cat("Mclust: non diabetici vs diabetici\n")
+tab_mclust <- table(Cluster = df$cluster_mclust, Diabetes = true_diabetes)
+print(tab_mclust)
+print(prop.table(tab_mclust, margin = 1))
+
+ari_mclust <- adjustedRandIndex(model$classification, true_diabetes)
+cat(sprintf("\nARI Mclust (K=%d) vs diabetes: %.4f\n",
+            length(unique(model$classification)), ari_mclust))
+```
+
+
+elbow plot e silhouette
+```{r}
+# Elbow plot
+wss <- sapply(1:8, function(k) {
+  kmeans(X_scaled, centers = k, nstart = 25, iter.max = 100)$tot.withinss
+})
+plot(1:8, wss, type = "b", pch = 19, col = "steelblue",
+     main = "Elbow Plot",
+     xlab = "Numero di cluster K", ylab = "WSS totale")
+abline(v = 2, col = "red", lty = 2)
+
+# Silhouette
+avg_sil <- sapply(2:8, function(k) {
+  km  <- kmeans(X_scaled, centers = k, nstart = 25, iter.max = 100)
+  sil <- silhouette(km$cluster, dist(X_scaled))
+  mean(sil[, 3])
+})
+plot(2:8, avg_sil, type = "b", pch = 19, col = "steelblue",
+     main = "Silhouette Media",
+     xlab = "Numero di cluster K", ylab = "Silhouette media")
+abline(v = which.max(avg_sil) + 1, col = "red", lty = 2)
+cat("K ottimale:", which.max(avg_sil) + 1, "\n")
+```
+
+kmeans
+```{r}
+# K-Means con K=2
+set.seed(42)
+km2 <- kmeans(X_scaled, centers = 2, nstart = 25, iter.max = 100)
+
+ari_km2 <- adjustedRandIndex(km2$cluster, true_diabetes)
+cat(sprintf("ARI K-Means (K=2): %.4f\n", ari_km2))
+
+tab_km2 <- table(KMeans = km2$cluster, Diabetes = true_diabetes)
+print(tab_km2)
+print(prop.table(tab_km2, margin = 1))
+```
+
+
+robust clustering
+```{r}
+set.seed(42)
+fit_trimmed_k_means <- tclust(
+  x            = X_scaled,
+  k            = 2,
+  alpha        = 0.05,
+  nstart       = 50,
+  restr.fact   = 5,
+  equal.weights = FALSE
+)
+
+mask      <- fit_trimmed_k_means$cluster != 0
+ari_tclust <- adjustedRandIndex(fit_trimmed_k_means$cluster[mask], true_diabetes[mask])
+cat(sprintf("ARI tclust (K=2, alpha=0.05): %.4f\n", ari_tclust))
+cat("Trimmed observations:", sum(!mask), "\n")
+
+tab_tclust <- table(TCLUST = fit_trimmed_k_means$cluster[mask], Diabetes = true_diabetes[mask])
+print(tab_tclust)
+print(prop.table(tab_tclust, margin = 1))
+
+# Confronto Mclust vs tclust
+table(Mclust = model$classification[mask],
+      TCLUST = fit_trimmed_k_means$cluster[mask])
+```
+
+pca
+```{r}
+pca     <- prcomp(X_scaled, center = FALSE, scale. = FALSE)
+pc1     <- pca$x[, 1]
+pc2     <- pca$x[, 2]
+var_exp <- round(summary(pca)$importance[2, 1:2] * 100, 1)
+
+# Colori k-means
+col_cluster  <- c("steelblue", "tomato")[km2$cluster]
+# Colori diagnosi reale
+col_diabetes <- c("steelblue", "tomato")[true_diabetes + 1]
+# Colori tclust (0 = trimmed = grigio)
+col_tclust <- c("gray70", "steelblue", "tomato")[fit_trimmed_k_means$cluster + 1]
+#Colori mclust
+col_mclust <- c("steelblue", "tomato")[model$classification]
+```
+
+visualizzazione mbc vs diagnosi reale
+```{r}
+par(mfrow = c(2, 2), mar = c(3, 3, 3, 1))
+
+plot(pc1, pc2, col = col_mclust, pch = 16, cex = 0.8,
+     main = "Groups found by MBC",
+     xlab = paste0("PC1 (", var_exp[1], "% var)"),
+     ylab = paste0("PC2 (", var_exp[2], "% var)"))
+
+plot(pc1, pc2, col = col_diabetes, pch = 16, cex = 0.8,
+     main = "Real diagnosis of diabetes",
+     xlab = paste0("PC1 (", var_exp[1], "% var)"),
+     ylab = paste0("PC2 (", var_exp[2], "% var)"))
+
+par(mar = c(0, 0, 0, 0))
+plot.new()
+legend(x = 0.2, y = 0.8,
+       legend = c("Cluster 1", "Cluster 2"),
+       col    = c("steelblue", "tomato"),
+       pch    = 16, bty = "n", cex = 1.1,
+       title  = "MBC")
+legend(x = 0.6, y = 0.8,
+       legend = c("Non-diabetic", "Diabetic"),
+       col    = c("steelblue", "tomato"),
+       pch    = 16, bty = "n", cex = 1.1,
+       title  = "Real diagnosis")
+
+
+par(mfrow = c(1, 1), mar = c(5, 4, 4, 2))
+```
+
+
+visualizzazione kmeans vs diagnosi reale
+```{r}
+par(mfrow = c(2, 2), mar = c(3, 3, 3, 1))
+
+plot(pc1, pc2, col = col_cluster, pch = 16, cex = 0.8,
+     main = "Groups fopund by K-Means",
+     xlab = paste0("PC1 (", var_exp[1], "% var)"),
+     ylab = paste0("PC2 (", var_exp[2], "% var)"))
+
+plot(pc1, pc2, col = col_diabetes, pch = 16, cex = 0.8,
+     main = "Real diagnosis of diabetes",
+     xlab = paste0("PC1 (", var_exp[1], "% var)"),
+     ylab = paste0("PC2 (", var_exp[2], "% var)"))
+
+par(mar = c(0, 0, 0, 0))
+plot.new()
+legend(x = 0.2, y = 0.8,
+       legend = c("Cluster 1", "Cluster 2"),
+       col    = c("steelblue", "tomato"),
+       pch    = 16, bty = "n", cex = 1.1,
+       title  = "K-Means group")
+legend(x = 0.6, y = 0.8,
+       legend = c("Non diabetic", "Diabetic"),
+       col    = c("steelblue", "tomato"),
+       pch    = 16, bty = "n", cex = 1.1,
+       title  = "Real diagnosis")
+
+par(mfrow = c(1, 1), mar = c(5, 4, 4, 2))
+```
+
+visualizzazione tclust vs diagnosi reale
+```{r}
+par(mfrow = c(2, 2), mar = c(3, 3, 3, 1))
+
+plot(pc1, pc2, col = col_tclust, pch = 16, cex = 0.8,
+     main = "Tclust groups",
+     xlab = paste0("PC1 (", var_exp[1], "% var)"),
+     ylab = paste0("PC2 (", var_exp[2], "% var)"))
+
+plot(pc1, pc2, col = col_diabetes, pch = 16, cex = 0.8,
+     main = "Real diagnosis",
+     xlab = paste0("PC1 (", var_exp[1], "% var)"),
+     ylab = paste0("PC2 (", var_exp[2], "% var)"))
+
+par(mar = c(0, 0, 0, 0))
+plot.new()
+legend(x = 0.1, y = 0.8,
+       legend = c("Cluster 1", "Cluster 2", "Trimmed"),
+       col    = c("steelblue", "tomato", "gray70"),
+       pch    = 16, bty = "n", cex = 1.1,
+       title  = "Tclust group")
+legend(x = 0.6, y = 0.8,
+       legend = c("Non diabetic", "Diabetic"),
+       col    = c("steelblue", "tomato"),
+       pch    = 16, bty = "n", cex = 1.1,
+       title  = "Real diagnosis")
+
+par(mfrow = c(1, 1), mar = c(5, 4, 4, 2))
+```
+
+ari a confronto
+```{r}
+cat("ARI\n")
+cat(sprintf("Mclust  (K=%d)          : ARI = %.4f\n",
+            length(unique(model$classification)), ari_mclust))
+cat(sprintf("K-Means (K=2)           : ARI = %.4f\n", ari_km2))
+cat(sprintf("tclust  (K=2, a=0.05)   : ARI = %.4f\n", ari_tclust))
+```
+
